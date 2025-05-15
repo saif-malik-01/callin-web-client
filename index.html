@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Call Web</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.0/socket.io.min.js"></script>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background-color: #f0f0f0;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:disabled {
+      background-color: #6c757d;
+      cursor: not-allowed;
+    }
+    button:hover:not(:disabled) {
+      background-color: #0056b3;
+    }
+  </style>
+</head>
+<body>
+  <button id="connectButton">Call User 2</button>
+  <script>
+    const userId = 'user2'; // Hardcoded for demo (use 'user2' in another browser)
+    const recipientId = 'user1'; // Target user
+    const socket = io('https://callin-signaling-server.onrender.com'); // Replace with ngrok/Heroku URL
+    let peerConnection = null;
+    const configuration = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    const connectButton = document.getElementById('connectButton');
+    let isCalling = false;
+
+    // Register user on connection
+    socket.on('connect', () => {
+      socket.emit('register', userId);
+    });
+
+    // Handle errors
+    socket.on('error', (message) => {
+      alert(message);
+      resetCall();
+    });
+
+    // Handle incoming offer
+    socket.on('offer', async ({ offer, from }) => {
+      try {
+        peerConnection = new RTCPeerConnection(configuration);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit('answer', { answer, from: userId, to: from });
+        peerConnection.onicecandidate = ({ candidate }) => {
+          if (candidate) {
+            socket.emit('ice-candidate', { candidate, to: from });
+          }
+        };
+        peerConnection.ontrack = (event) => {
+          const audio = new Audio();
+          audio.srcObject = event.streams[0];
+          audio.play();
+        };
+        setCallingState(true);
+      } catch (error) {
+        console.error('Error handling offer:', error);
+        resetCall();
+      }
+    });
+
+    // Handle answer
+    socket.on('answer', async ({ answer }) => {
+      try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+      } catch (error) {
+        console.error('Error handling answer:', error);
+        resetCall();
+      }
+    });
+
+    // Handle ICE candidate
+    socket.on('ice-candidate', async ({ candidate }) => {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.error('Error handling ICE candidate:', error);
+      }
+    });
+
+    // Handle call end
+    socket.on('end-call', () => {
+      resetCall();
+    });
+
+    // Start call
+    async function startCall() {
+      try {
+        peerConnection = new RTCPeerConnection(configuration);
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('offer', { offer, from: userId, to: recipientId });
+        peerConnection.onicecandidate = ({ candidate }) => {
+          if (candidate) {
+            socket.emit('ice-candidate', { candidate, to: recipientId });
+          }
+        };
+        peerConnection.ontrack = (event) => {
+          const audio = new Audio();
+          audio.srcObject = event.streams[0];
+          audio.play();
+        };
+        setCallingState(true);
+      } catch (error) {
+        console.error('Error starting call:', error);
+        resetCall();
+      }
+    }
+
+    // End call
+    function endCall() {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      socket.emit('end-call', { to: recipientId });
+      resetCall();
+    }
+
+    // Update UI
+    function setCallingState(calling) {
+      isCalling = calling;
+      connectButton.textContent = isCalling ? 'Disconnect' : 'Call User 2';
+      connectButton.disabled = !recipientId && !isCalling;
+    }
+
+    // Reset call state
+    function resetCall() {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      setCallingState(false);
+    }
+
+    // Button click handler
+    connectButton.addEventListener('click', () => {
+      if (isCalling) {
+        endCall();
+      } else {
+        startCall();
+      }
+    });
+  </script>
+</body>
+</html>
